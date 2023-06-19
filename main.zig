@@ -27,8 +27,27 @@ const CSSRule = struct {
     properties: []CSSProperty,
 };
 
-const CSSTree = struct {
+const CSSSheet = struct {
     rules: []CSSRule,
+
+    fn display(sheet: *CSSSheet) void {
+        for (sheet.rules) |rule| {
+            std.debug.print("selector: {s}\n", .{rule.selector});
+            for (rule.properties) |property| {
+                inline for (@typeInfo(CSSProperty).Union.fields) |u_field| {
+                    if (comptime !std.mem.eql(u8, u_field.name, "unknown")) {
+                        if (std.mem.eql(u8, u_field.name, @tagName(property))) {
+                            std.debug.print("  {s}: {s}\n", .{
+                                @tagName(property),
+                                @field(property, u_field.name),
+                            });
+                        }
+                    }
+                }
+            }
+            std.debug.print("\n", .{});
+        }
+    }
 };
 
 fn eat_whitespace(
@@ -224,7 +243,7 @@ fn parse_rule(
 fn parse(
     arena: *std.heap.ArenaAllocator,
     css: []const u8,
-) !CSSTree {
+) !CSSSheet {
     var index: usize = 0;
     var rules = std.ArrayList(CSSRule).init(arena.allocator());
 
@@ -236,7 +255,7 @@ fn parse(
         index = eat_whitespace(css, index);
     }
 
-    return CSSTree{
+    return CSSSheet{
         .rules = rules.items,
     };
 }
@@ -265,22 +284,6 @@ pub fn main() !void {
     var css_file = try allocator.alloc(u8, file_size);
     _ = try file.read(css_file);
 
-    var tree = parse(&arena, css_file) catch return;
-
-    for (tree.rules) |rule| {
-        std.debug.print("selector: {s}\n", .{rule.selector});
-        for (rule.properties) |property| {
-            inline for (@typeInfo(CSSProperty).Union.fields) |u_field| {
-                if (comptime !std.mem.eql(u8, u_field.name, "unknown")) {
-                    if (std.mem.eql(u8, u_field.name, @tagName(property))) {
-                        std.debug.print("  {s}: {s}\n", .{
-                            @tagName(property),
-                            @field(property, u_field.name),
-                        });
-                    }
-                }
-            }
-        }
-        std.debug.print("\n", .{});
-    }
+    var sheet = parse(&arena, css_file) catch return;
+    sheet.display();
 }
