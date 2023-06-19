@@ -6,7 +6,7 @@ dynamically as well.
 
 This was live-streamed on [my Twitch](https://twitch.tv/eatonphil).
 
-Blog post to come shortly.
+The accompanying blog post is [available here](https://notes.eatonphil.com/2023-06-19-metaprogramming-in-zig-and-parsing-css.html).
 
 ```console
 $ zig build-exe main.zig
