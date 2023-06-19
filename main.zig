@@ -1,25 +1,26 @@
 const std = @import("std");
 
 const CSSProperty = union(enum) {
-    unknown: u1,
+    unknown: void,
     color: []const u8,
     background: []const u8,
 };
 
 fn match_property(
-    property: *CSSProperty,
     name: []const u8,
     value: []const u8,
-) !void {
+) !CSSProperty {
     const cssPropertyInfo = @typeInfo(CSSProperty);
 
     inline for (cssPropertyInfo.Union.fields) |u_field| {
         if (comptime !std.mem.eql(u8, u_field.name, "unknown")) {
             if (std.mem.eql(u8, u_field.name, name)) {
-                property.* = @unionInit(CSSProperty, u_field.name, value);
+                return @unionInit(CSSProperty, u_field.name, value);
             }
         }
     }
+
+    return error.UnknownProperty;
 }
 
 const CSSRule = struct {
@@ -145,7 +146,6 @@ const ParsePropertyResult = struct {
     property: CSSProperty,
     index: usize,
 };
-
 fn parse_property(
     css: []const u8,
     initial_index: usize,
@@ -176,13 +176,10 @@ fn parse_property(
     // Finally parse semi-colon: ;.
     index = try parse_syntax(css, index, ';');
 
-    var property: CSSProperty = CSSProperty{ .unknown = 1 };
-    try match_property(&property, name_res.identifier, value_res.identifier);
-
-    if (std.mem.eql(u8, @tagName(property), "unknown")) {
+    var property = match_property(name_res.identifier, value_res.identifier) catch |e| {
         debug_at(css, initial_index, "Unknown property: '{s}'.", .{name_res.identifier});
-        return error.UnknownProperty;
-    }
+        return e;
+    };
 
     return ParsePropertyResult{
         .property = property,
