@@ -1,55 +1,45 @@
 const std = @import("std");
 
-const CSSProperty = union(enum) {
-    unknown: void,
-    color: []const u8,
-    background: []const u8,
+pub const CSS = struct {
+    pub const Property = union(enum) {
+        color: []const u8,
+        background: []const u8,
+
+        pub const Tag = std.meta.Tag(Property);
+    };
+    pub const Rule = struct {
+        selector: []const u8,
+        properties: []Property,
+    };
+    pub const Sheet = struct {
+        rules: []Rule,
+
+        pub fn format(sheet: Sheet, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            for (sheet.rules) |rule| {
+                try writer.print("selector: {s}\n", .{rule.selector});
+                for (rule.properties) |property| {
+                    switch (property) {
+                        inline else => |payload, tag| {
+                            try writer.print("  {s}: {s}\n", .{ @tagName(tag), payload });
+                        },
+                    }
+                }
+                try writer.print("\n", .{});
+            }
+        }
+    };
 };
 
 fn match_property(
     name: []const u8,
     value: []const u8,
-) !CSSProperty {
-    const cssPropertyInfo = @typeInfo(CSSProperty);
-
-    inline for (cssPropertyInfo.Union.fields) |u_field| {
-        if (comptime !std.mem.eql(u8, u_field.name, "unknown")) {
-            if (std.mem.eql(u8, u_field.name, name)) {
-                return @unionInit(CSSProperty, u_field.name, value);
-            }
-        }
+) !CSS.Property {
+    const ptag = std.meta.stringToEnum(CSS.Property.Tag, name) orelse
+        return error.UnknownProperty;
+    switch (ptag) {
+        inline else => |tag| return @unionInit(CSS.Property, @tagName(tag), value),
     }
-
-    return error.UnknownProperty;
 }
-
-const CSSRule = struct {
-    selector: []const u8,
-    properties: []CSSProperty,
-};
-
-const CSSSheet = struct {
-    rules: []CSSRule,
-
-    fn display(sheet: *CSSSheet) void {
-        for (sheet.rules) |rule| {
-            std.debug.print("selector: {s}\n", .{rule.selector});
-            for (rule.properties) |property| {
-                inline for (@typeInfo(CSSProperty).Union.fields) |u_field| {
-                    if (comptime !std.mem.eql(u8, u_field.name, "unknown")) {
-                        if (std.mem.eql(u8, u_field.name, @tagName(property))) {
-                            std.debug.print("  {s}: {s}\n", .{
-                                @tagName(property),
-                                @field(property, u_field.name),
-                            });
-                        }
-                    }
-                }
-            }
-            std.debug.print("\n", .{});
-        }
-    }
-};
 
 fn eat_whitespace(
     css: []const u8,
@@ -105,14 +95,17 @@ fn debug_at(
     std.debug.print("^ Near here.\n", .{});
 }
 
-const ParseIdentifierResult = struct {
-    identifier: []const u8,
-    index: usize,
-};
+pub fn Result(comptime T: type) type {
+    return struct {
+        value: T,
+        index: usize,
+    };
+}
+
 fn parse_identifier(
     css: []const u8,
     initial_index: usize,
-) !ParseIdentifierResult {
+) !Result([]const u8) {
     var index = initial_index;
     while (index < css.len and std.ascii.isAlphabetic(css[index])) {
         index += 1;
@@ -123,8 +116,8 @@ fn parse_identifier(
         return error.InvalidIdentifier;
     }
 
-    return ParseIdentifierResult{
-        .identifier = css[initial_index..index],
+    return .{
+        .value = css[initial_index..index],
         .index = index,
     };
 }
@@ -142,14 +135,10 @@ fn parse_syntax(
     return error.NoSuchSyntax;
 }
 
-const ParsePropertyResult = struct {
-    property: CSSProperty,
-    index: usize,
-};
 fn parse_property(
     css: []const u8,
     initial_index: usize,
-) !ParsePropertyResult {
+) !Result(CSS.Property) {
     var index = eat_whitespace(css, initial_index);
 
     // First parse property name.
@@ -176,26 +165,22 @@ fn parse_property(
     // Finally parse semi-colon: ;.
     index = try parse_syntax(css, index, ';');
 
-    var property = match_property(name_res.identifier, value_res.identifier) catch |e| {
-        debug_at(css, initial_index, "Unknown property: '{s}'.", .{name_res.identifier});
+    var property = match_property(name_res.value, value_res.value) catch |e| {
+        debug_at(css, initial_index, "Unknown property: '{s}'.", .{name_res.value});
         return e;
     };
 
-    return ParsePropertyResult{
-        .property = property,
+    return .{
+        .value = property,
         .index = index,
     };
 }
 
-const ParseRuleResult = struct {
-    rule: CSSRule,
-    index: usize,
-};
 fn parse_rule(
-    arena: *std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
     css: []const u8,
     initial_index: usize,
-) !ParseRuleResult {
+) !Result(CSS.Rule) {
     var index = eat_whitespace(css, initial_index);
 
     // First parse selector(s).
@@ -209,7 +194,7 @@ fn parse_rule(
 
     index = eat_whitespace(css, index);
 
-    var properties = std.ArrayList(CSSProperty).init(arena.allocator());
+    var properties = std.ArrayList(CSS.Property).init(allocator);
     // Then parse any number of properties.
     while (index < css.len) {
         index = eat_whitespace(css, index);
@@ -217,10 +202,10 @@ fn parse_rule(
             break;
         }
 
-        var attr_res = try parse_property(css, index);
+        const attr_res = try parse_property(css, index);
         index = attr_res.index;
 
-        try properties.append(attr_res.property);
+        try properties.append(attr_res.value);
     }
 
     index = eat_whitespace(css, index);
@@ -228,9 +213,9 @@ fn parse_rule(
     // Then parse closing curly brace: }.
     index = try parse_syntax(css, index, '}');
 
-    return ParseRuleResult{
-        .rule = CSSRule{
-            .selector = selector_res.identifier,
+    return .{
+        .value = .{
+            .selector = selector_res.value,
             .properties = properties.items,
         },
         .index = index,
@@ -238,21 +223,20 @@ fn parse_rule(
 }
 
 fn parse(
-    arena: *std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
     css: []const u8,
-) !CSSSheet {
+) !CSS.Sheet {
     var index: usize = 0;
-    var rules = std.ArrayList(CSSRule).init(arena.allocator());
+    var rules = std.ArrayList(CSS.Rule).init(allocator);
 
     // Parse rules until EOF.
     while (index < css.len) {
-        var res = try parse_rule(arena, css, index);
-        index = res.index;
-        try rules.append(res.rule);
-        index = eat_whitespace(css, index);
+        const res = try parse_rule(allocator, css, index);
+        try rules.append(res.value);
+        index = eat_whitespace(css, res.index);
     }
 
-    return CSSSheet{
+    return .{
         .rules = rules.items,
     };
 }
@@ -269,18 +253,15 @@ pub fn main() !void {
     // Skips the program name.
     _ = args.next();
 
-    var file_name: []const u8 = "";
-    if (args.next()) |f| {
-        file_name = f;
-    }
+    const file_name = args.next() orelse {
+        std.debug.print("First argument missing. Should be a css file path\n", .{});
+        std.process.exit(1);
+    };
 
     const file = try std.fs.cwd().openFile(file_name, .{});
     defer file.close();
+    const css_file = try file.readToEndAlloc(allocator, std.math.maxInt(u32));
 
-    const file_size = try file.getEndPos();
-    var css_file = try allocator.alloc(u8, file_size);
-    _ = try file.read(css_file);
-
-    var sheet = parse(&arena, css_file) catch return;
-    sheet.display();
+    var sheet = parse(allocator, css_file) catch return;
+    std.debug.print("{}", .{sheet});
 }
